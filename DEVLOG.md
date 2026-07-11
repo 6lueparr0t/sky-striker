@@ -4,8 +4,6 @@
 
 ## 왜 이 스택인가 (배경)
 
-- 원래 **Tauri**로 만들려 했으나, 사내망에서 **crates.io(Rust 크레이트 저장소)가 SSL 레벨에서 차단**되어 빌드 실패.
-- 네트워크 점검 결과: **npm ✅ / github ✅ / crates.io ❌**.
 - Electron은 용량(크롬 통째 번들 → 100MB+)이 부담.
 - → **Neutralinojs** 선택: OS 웹뷰 사용(앱 2~5MB), 웹기술(HTML/CSS/JS) 그대로, CLI는 npm·바이너리는 github에서 받아 **폐쇄망에서 문제없이 빌드됨**. Rust/crates.io 안 건드림.
 
@@ -135,9 +133,3 @@ neu build --release     # 배포용 zip까지
 - `spawnBoss()`(hp 7680) / `spawnMidboss()`(kind: apollo/station, station은 stageIndex≥3, 체력 ×4)
 - `fitCanvas()`(창 맞춤 스케일) / `toggleFullscreen()`(F키) / `textBg()`·`plated()`(글자 뒤 어두운 배경)
 - `startHidden()`: 구출 대상 수(우주선1/우주인9), `updateHidden()`: 블랙홀 인력(pull)·우주인 끌림
-
-## 남은 아이디어 (선택)
-
-- [ ] BGM(배경음악) 루프 추가
-- [ ] 스테이지별 배경/색 테마, 난이도 선택
-- [ ] 배포 전 디버그 단축키 유지/제거 결정 (현재 의도적으로 유지)
