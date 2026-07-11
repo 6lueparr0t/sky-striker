@@ -1,0 +1,16 @@
+{
+  "name": "sky-striker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sky Striker - a Neutralinojs game app",
+  "license": "MIT",
+  "scripts": {
+    "dev": "neu run",
+    "build": "neu build --release",
+    "build:mac": "neu build --release && bash scripts/make-mac-app.sh",
+    "update": "neu update"
+  },
+  "devDependencies": {
+    "@neutralinojs/neu": "^11.3.0"
+  }
+}

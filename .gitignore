@@ -1,0 +1,23 @@
+# Dependencies
+/node_modules
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Developer tools' files
+.lite_workspace.lua
+
+# Neutralinojs binaries and builds
+/bin
+/dist
+
+# Neutralinojs client (minified)
+neutralino.js
+
+# Neutralinojs related files
+.storage
+*.log
+
+# OMC agent state
+.omc
