@@ -143,6 +143,8 @@
   // Fire power 1~5: 공격력(탄당 데미지)은 항상 1 고정 — 레벨이 오르면 공격 패턴과
   // 탄량이 늘어날 뿐, 한 발 한 발이 세지지는 않는다.
   const POWER_MAX = 5, MISSILE_MAX = 5;
+  // C 게이지는 3단으로 차오른다: 100=1단(폭주), 200=2단(탄막소거), 300=3단(소거+전멸).
+  const CHARGE_MAX = 300, CHARGE_STEP = 100;
   let cutscene, allies, rescuedCount, hiddenTotal, hiddenTime, clears, flashTime = 0;
   let disco = true, eggMsgTimer = 0, eggMsg = "", eggParticles = [];
   let bonus = null, bonusTimer = 20;
@@ -191,7 +193,7 @@
       cooldown: 0, invuln: 0,
       parryActive: 0, parryCd: 0,
       missileLevel: 0, missileTimer: 0, missileQueue: 0, missileGap: 0,
-      charge: 0, emp: 0,
+      charge: 0, emp: 0, frenzy: 0,
     };
   }
 
@@ -305,7 +307,7 @@
       x: W / 2, y: -90, w: 130, h: 90,
       hp, maxHp: hp, entering: true,
       dir: 1, patternTimer: 0, pattern: 0, angle: 0,
-      laserState: "off", laserTimer: 0, laserXs: [], empWave: null,
+      laserState: "off", laserTimer: 0, laserXs: [], empWave: null, empBroken: false,
     };
   }
 
@@ -376,20 +378,22 @@
   function playerFire() {
     const lvl = player.power;
     const y = player.y - player.h / 2;
-    const dmg = 1;   // 파워업해도 데미지는 그대로 — 늘어나는 건 패턴과 탄량뿐
+    const frenzy = player.frenzy > 0;                   // 폭주 중엔 데미지 2배·연사 4배·자동발사
+    const dmg = frenzy ? 2 : 1;   // 파워업으론 데미지가 안 오르지만 폭주는 예외
     const shot = (dx, ox = 0, dy = -520) => bullets.push({ x: player.x + ox, y, vx: dx, vy: dy, w: 5, h: 12, dmg });
     shot(0);                                            // Lv1: 정면 단발
     if (lvl >= 2) { shot(0, -8); shot(0, 8); }          // Lv2: 좌우 병렬탄 추가
     if (lvl >= 3) { shot(-120, -10); shot(120, 10); }   // Lv3: 확산탄 추가
     if (lvl >= 4) { shot(-260, -14); shot(260, 14); }   // Lv4: 넓은 확산탄 추가
     if (lvl >= 5) { shot(-460, -18, -360); shot(460, 18, -360); }  // Lv5: 측면 견제탄 추가 (신규 패턴)
-    player.cooldown = 0.16;
+    player.cooldown = frenzy ? 0.04 : 0.16;   // 폭주 중 연사 4배
     sfx("shoot");
   }
 
   // parry (Zelda-style): X opens a 0.4s block window on a 1.5s cooldown. Bullets
   // caught in the window become blazing-fast homing shots — a guaranteed counter.
   function activateParry() {
+    if (player.frenzy > 0) return;   // 폭주 모드 중엔 패링 봉인 (공격에 집중)
     if (player.parryCd <= 0) {
       player.parryActive = 0.4;
       player.parryCd = 1.5;
@@ -401,18 +405,54 @@
     // 일반 탄을 튕기면 6, 최종 보스의 유도탄을 튕겨내면 4배(24) 위력으로 되돌아간다.
     const dmg = eb.homing ? 24 : 6;
     bullets.push({ x: eb.x, y: eb.y, vx: 0, vy: -300, w: 10, h: 16, dmg, reflected: true, homing: true, target: null });
-    player.charge = Math.min(100, player.charge + 5);   // 2x more reflects needed to fill
+    player.charge = Math.min(CHARGE_MAX, player.charge + 5);   // 3단(300)까지 차오른다
     sfx("reflect");
   }
 
-  // C bomb: once the parry charge is full, wipe every enemy bullet with a flash.
+  // C skill: 채운 단계만큼 강력해진다. 눌러서 발동하면 게이지는 전부 소진된다.
+  //   1단(100~): 폭주 모드   2단(200~): 탄막 전체 소거   3단(300): 소거 + 일반 적 전멸
   function bombSkill() {
+    const stage = player.charge >= 300 ? 3 : player.charge >= 200 ? 2 : player.charge >= 100 ? 1 : 0;
+    if (stage === 0) return;
+    player.charge = 0;
+
+    if (stage === 1) { activateFrenzy(); return; }
+
+    // 2·3단 공통: 화면의 적 탄막을 전부 소거
     for (const eb of eBullets) boom(eb.x, eb.y, "#7fffe0", 2);
     eBullets = [];
-    player.charge = 0;
     flashTime = 0.3;
     shakeTime = Math.max(shakeTime, 0.2);
     sfx("bossexplode");
+
+    if (stage === 3) {
+      // 3단 추가 효과: 일반 잡몹은 전멸, 미드보스·보스는 큰 데미지만 (보스는 EMP까지 고장)
+      for (const e of [...enemies]) { if (e.hp > 0) killEnemy(e); }
+      enemies = [];
+      if (midboss && !midboss.entering) midboss.hp -= Math.round(midboss.maxHp * 0.25);
+      if (boss && !boss.entering) {
+        boss.hp -= Math.round(boss.maxHp * 0.2);
+        boss.empBroken = true;   // 최종보스 EMP 공격 영구 고장
+      }
+      flashTime = 0.5;
+      shakeTime = Math.max(shakeTime, 0.35);
+    }
+  }
+
+  // 폭주 모드(1단): 3초간 데미지 2배·연사 4배·총알 자동발사, 미사일 40발 동시 발사. 대신 패링 봉인.
+  function activateFrenzy() {
+    player.frenzy = 3;
+    player.parryActive = 0;      // 진행 중이던 패링 창은 즉시 닫는다
+    // 미사일 40발을 한 번에 발사 — 좌우로 넓게 퍼뜨려 유도탄 벽을 만든다
+    for (let i = 0; i < 40; i++) {
+      const spread = (i - 19.5) / 19.5;   // -1 ~ 1
+      missiles.push({ x: player.x + spread * 60, y: player.y - 12, vx: spread * 220, vy: -480, w: 9, h: 16, target: null, life: 4 });
+    }
+    player.missileQueue = 0;
+    sfx("missile");
+    flashTime = 0.3;
+    shakeTime = Math.max(shakeTime, 0.25);
+    sfx("clear");
   }
 
   function aim(x, y, sp) {
@@ -479,16 +519,17 @@
     for (const m of missiles) {
       if (m.life <= 0) continue;
       let struck = false;
+      const mdmg = player.frenzy > 0 ? 2 : 1;   // 폭주 중 미사일 데미지 2배
       for (const e of enemies) {
         if (e.hp > 0 && hit(m, e)) {
-          e.hp -= 3; struck = true;
+          e.hp -= 3 * mdmg; struck = true;
           if (e.hp <= 0) killEnemy(e);
           break;
         }
       }
       if (!struck) {
         for (const tgt of [midboss, boss]) {
-          if (tgt && !tgt.entering && hit(m, tgt)) { tgt.hp -= 14; struck = true; break; }
+          if (tgt && !tgt.entering && hit(m, tgt)) { tgt.hp -= 14 * mdmg; struck = true; break; }
         }
       }
       if (struck) { boom(m.x, m.y, "#ffcf6b", 18); sfx("explode"); m.life = 0; }
@@ -750,6 +791,7 @@
     if (player.parryCd > 0) player.parryCd -= dt;
     if (player.cooldown > 0) player.cooldown -= dt;
     if (player.emp > 0) player.emp -= dt;   // EMP 마비 지속시간
+    if (player.frenzy > 0) player.frenzy -= dt;   // 폭주 모드 남은 시간
 
     movePlayer(dt);
     if (disco) particles.push({ x: player.x, y: player.y + 10, vx: (Math.random() - 0.5) * 20, vy: 70, life: 0.5, color: `hsl(${(performance.now() / 5) % 360},90%,62%)` });
@@ -757,23 +799,24 @@
     // Z = fire, X = parry, C = bomb (when charged)
     // EMP에 맞으면 Z 공격과 C 폭탄이 멈춘다 — 실드(X)와 유도 미사일만 살아있다.
     // 패링(방어) 중에는 공격/폭탄을 쏠 수 없다 — 반사에 집중.
-    if (keys.KeyZ && player.cooldown <= 0 && player.emp <= 0 && player.parryActive <= 0) playerFire();
+    if ((keys.KeyZ || player.frenzy > 0) && player.cooldown <= 0 && player.emp <= 0 && player.parryActive <= 0) playerFire();
     if (pressed("KeyX")) activateParry();
     if (pressed("KeyC") && player.charge >= 100 && player.emp <= 0 && player.parryActive <= 0) bombSkill();
 
     // auto homing missiles: fired ONE at a time, one per step in sequence.
-    // missileLevel (1~5) = number of missiles per salvo.
+    // 큐에 쌓인 미사일은 항상 순차 발사한다 — 폭주 20발은 미사일 미보유여도 나간다.
+    if (player.missileGap > 0) player.missileGap -= dt;
+    if (player.missileQueue > 0 && player.missileGap <= 0 && player.parryActive <= 0) {
+      missiles.push({ x: player.x, y: player.y - 12, vx: 0, vy: -480, w: 9, h: 16, target: null, life: 4 });
+      player.missileQueue--;
+      player.missileGap = 0.14;
+      sfx("missile");
+    }
+    // 리로드는 미사일을 보유(missileLevel 1~5)했을 때만. missileLevel = 한 번에 재장전할 발수.
     if (player.missileLevel > 0) {
       player.missileTimer -= dt;
-      if (player.missileGap > 0) player.missileGap -= dt;
-      if (player.missileQueue > 0 && player.missileGap <= 0 && player.parryActive <= 0) {
-        missiles.push({ x: player.x, y: player.y - 12, vx: 0, vy: -480, w: 9, h: 16, target: null, life: 4 });
-        player.missileQueue--;
-        player.missileGap = 0.14;
-        sfx("missile");
-      }
       if (player.missileTimer <= 0 && player.missileQueue <= 0 && acquireTarget()) {
-        player.missileQueue = player.missileLevel;   // reload: missileLevel missiles
+        player.missileQueue = player.missileLevel;
         player.missileTimer = 0.85;
       }
     }
@@ -1124,9 +1167,12 @@
             eBullets.push({ x: cx, y: cy, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, w: 7, h: 22, needle: true, fastshot: true });
           }
           sfx("reflect");                                          // sharp zip telegraph
-        } else if (P === 10) {                                     // EMP 파 — 맞으면 공격·C 정지 (실드·미사일만)
+        } else if (P === 10 && !boss.empBroken) {                  // EMP 파 — 맞으면 공격·C 정지 (실드·미사일만)
           boss.empWave = { r: 0, hit: false };
           shakeTime = Math.max(shakeTime, 0.25);
+          sfx("hit");
+        } else if (P === 10) {                                     // EMP 고장 — 3단 스킬에 맞아 발사 실패, 헛도는 스파크만
+          for (let i = 0; i < 10; i++) particles.push({ x: cx + (Math.random() - 0.5) * 40, y: cy + (Math.random() - 0.5) * 30, vx: (Math.random() - 0.5) * 120, vy: (Math.random() - 0.5) * 120, life: 0.3, color: "#5cd0ff" });
           sfx("hit");
         } else {                                                   // charged laser(s) — always multi now
           const beams = rage < 0.35 ? 2 : rage < 0.7 ? 3 : 4;
@@ -1436,19 +1482,35 @@
     for (let i = 0; i < Math.max(0, player.lives); i++) { ctx.fillStyle = "#5ad1ff"; ctx.fillText("▲", lx, 42); lx -= 16; }
     ctx.textAlign = "left"; ctx.fillStyle = "#9fb8ff";
     plated(`PWR ${"◆".repeat(player.power)}${"◇".repeat(POWER_MAX - player.power)}`, 10, H - 12);
-    // parry charge meter (full → C wipes all bullets)
-    const cw = 96, cx0 = 10, cy0 = H - 44;
+    // C charge meter: 3단 게이지 (1단 폭주 / 2단 소거 / 3단 소거+전멸)
+    const cw = 120, cx0 = 10, cy0 = H - 44;
+    const cStage = player.charge >= 300 ? 3 : player.charge >= 200 ? 2 : player.charge >= 100 ? 1 : 0;
+    const cColors = ["#4a90c0", "#ffb454", "#7fffe0", "#ff6bd0"];
     ctx.fillStyle = "#1a2540"; ctx.fillRect(cx0, cy0, cw, 6);
-    ctx.fillStyle = player.charge >= 100 ? "#7fffe0" : "#4a90c0";
-    ctx.fillRect(cx0, cy0, cw * (player.charge / 100), 6);
-    ctx.font = "13px 'Segoe UI'"; ctx.fillStyle = player.charge >= 100 ? "#7fffe0" : "#5a6a7a";
-    plated(player.charge >= 100 ? "[C] 탄막소거 READY!" : "[C] CHARGE", cx0, cy0 - 4);
+    ctx.fillStyle = cColors[cStage];
+    ctx.fillRect(cx0, cy0, cw * (player.charge / CHARGE_MAX), 6);
+    ctx.fillStyle = "#0a1020";   // 단계 구분선
+    ctx.fillRect(cx0 + cw / 3, cy0, 1, 6); ctx.fillRect(cx0 + cw * 2 / 3, cy0, 1, 6);
+    ctx.font = "13px 'Segoe UI'"; ctx.fillStyle = cStage > 0 ? cColors[cStage] : "#5a6a7a";
+    const cLabels = ["[C] CHARGE", "[C] 1단 폭주!", "[C] 2단 소거!", "[C] 3단 소거+전멸!"];
+    plated(cLabels[cStage], cx0, cy0 - 4);
     ctx.textAlign = "right";
     const parryReady = player.parryCd <= 0;
-    ctx.fillStyle = player.parryActive > 0 ? "#b4f0ff" : parryReady ? "#43e0c0" : "#5a6a7a";
-    plated(parryReady ? "[X] PARRY READY" : `[X] PARRY ${player.parryCd.toFixed(1)}s`, W - 10, H - 30);
+    if (player.frenzy > 0) { ctx.fillStyle = "#5a6a7a"; plated("[X] 폭주중 봉인", W - 10, H - 30); }
+    else {
+      ctx.fillStyle = player.parryActive > 0 ? "#b4f0ff" : parryReady ? "#43e0c0" : "#5a6a7a";
+      plated(parryReady ? "[X] PARRY READY" : `[X] PARRY ${player.parryCd.toFixed(1)}s`, W - 10, H - 30);
+    }
     ctx.fillStyle = player.missileLevel > 0 ? "#ffcf6b" : "#5a6a7a";
     plated(`MISSILE Lv.${player.missileLevel}`, W - 10, H - 12);
+    if (player.frenzy > 0) {   // 폭주 모드 배너
+      ctx.textAlign = "center"; ctx.font = "bold 18px 'Segoe UI'";
+      const msg = `🔥 폭주! ${player.frenzy.toFixed(1)}s`;
+      textBg(msg, W / 2, H - 72, false, 8);
+      ctx.fillStyle = `rgba(255,180,90,${0.7 + 0.3 * Math.sin(performance.now() / 60)})`;
+      ctx.fillText(msg, W / 2, H - 72);
+      ctx.textAlign = "left";
+    }
     if (player.emp > 0) {   // EMP 마비 경고 — 공격/C 불가
       ctx.textAlign = "center"; ctx.font = "bold 18px 'Segoe UI'";
       textBg("⚡ EMP! 공격불가", W / 2, H - 72, false, 8);
