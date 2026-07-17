@@ -12,7 +12,25 @@
   // ---- input ----------------------------------------------------------------
   const keys = {};
   const DOWN_ONCE = {};
+
+  // macOS (WKWebView) emits a system "funk" beep for any key that falls through
+  // to the AppKit responder chain (doCommandBySelector:). e.preventDefault() can't
+  // stop it — it lives at the native layer. Keeping an invisible editable element
+  // focused makes the webview consume keys as text input, so they never reach that
+  // fallthrough and the beep is silenced.
+  const keySink = document.createElement("input");
+  keySink.setAttribute("aria-hidden", "true");
+  keySink.tabIndex = -1;
+  keySink.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;pointer-events:none;";
+  document.body.appendChild(keySink);
+  const refocusSink = () => { try { keySink.focus({ preventScroll: true }); } catch (e) { } keySink.value = ""; };
+  addEventListener("focus", refocusSink);
+  addEventListener("click", refocusSink);
+  keySink.addEventListener("blur", () => setTimeout(refocusSink, 0));
+  refocusSink();
+
   addEventListener("keydown", (e) => {
+    keySink.value = "";
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"].includes(e.code)) e.preventDefault();
     initAudio();
     if (actx && actx.state === "suspended") actx.resume();
@@ -620,7 +638,7 @@
 
   // ---- pause menu -----------------------------------------------------------
   function handlePause() {
-    if (pressed("KeyP") || pressed("Escape")) { state = prevState; return; }
+    if (pressed("KeyP")) { state = prevState; return; }
     if (pressed("ArrowUp")) pauseSel = (pauseSel + 2) % 3;
     if (pressed("ArrowDown")) pauseSel = (pauseSel + 1) % 3;
     if (pressed("Enter")) {
@@ -1706,7 +1724,7 @@
       ctx.fillText((sel ? "▶  " : "    ") + opts[i], W / 2, H * 0.46 + i * 42);
     }
     ctx.fillStyle = "#5a6a7a"; ctx.font = "14px 'Segoe UI'";
-    ctx.fillText("↑↓ 선택 · Enter 확인 · P/ESC 재개", W / 2, H * 0.46 + 3 * 42 + 20);
+    ctx.fillText("↑↓ 선택 · Enter 확인 · P 재개", W / 2, H * 0.46 + 3 * 42 + 20);
     ctx.textAlign = "left";
   }
 
@@ -1856,7 +1874,7 @@
     if (pressed("Digit7")) startHidden();
 
     // pause toggle (only from active gameplay)
-    if ((state === STATE.PLAY || state === STATE.CLEAR || state === STATE.HIDDEN) && (pressed("KeyP") || pressed("Escape"))) {
+    if ((state === STATE.PLAY || state === STATE.CLEAR || state === STATE.HIDDEN) && pressed("KeyP")) {
       prevState = state; pauseSel = 0; state = STATE.PAUSE;
     }
 
@@ -1898,12 +1916,15 @@
   }
   addEventListener("resize", fitCanvas);
 
-  let fullscreen = false;
-  function toggleFullscreen() {
+  async function toggleFullscreen() {
     if (!(window.Neutralino && Neutralino.window)) return;
-    fullscreen = !fullscreen;
-    (fullscreen ? Neutralino.window.setFullScreen() : Neutralino.window.exitFullScreen())
-      .then(() => setTimeout(fitCanvas, 60)).catch(() => { });
+    try {
+      // Toggle off the real window state so ESC / the green button (which exit
+      // native fullscreen on their own) never desync a local flag.
+      const isFs = await Neutralino.window.isFullScreen();
+      await (isFs ? Neutralino.window.exitFullScreen() : Neutralino.window.setFullScreen());
+    } catch (e) { }
+    setTimeout(fitCanvas, 60);
   }
 
   starLayers = [makeStars(40, 30), makeStars(30, 70), makeStars(18, 130)];
